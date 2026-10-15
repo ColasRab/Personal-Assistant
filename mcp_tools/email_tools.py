@@ -1,6 +1,6 @@
 from fastmcp import FastMCP
 
-email_mcp = FastMCP("Email Tools")
+email_mcp = FastMCP("Email Tools", mask_error_details=True)
 
 
 @email_mcp.tool

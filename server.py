@@ -5,8 +5,9 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from mcp_tools import email_mcp, linkedin_mcp
+from mcp_auth import configured_auth
 
-mcp = FastMCP("Personal Assistant")
+mcp = FastMCP("Personal Assistant", auth=configured_auth(), mask_error_details=True)
 
 mcp.mount(linkedin_mcp, namespace="linkedin")
 mcp.mount(email_mcp, namespace="email")
