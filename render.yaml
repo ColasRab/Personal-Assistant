@@ -1,0 +1,7 @@
+services:
+  - type: pserv
+    name: personal-assistant-mcp
+    runtime: docker
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
