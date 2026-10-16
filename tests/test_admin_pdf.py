@@ -12,12 +12,13 @@ from fastmcp.exceptions import ToolError
 from starlette.testclient import TestClient
 
 from admin_pdf import extract_admin_pdf, MAX_BODY_BYTES, MAX_ADMIN_PDF_BYTES, sign_pdf_token
-from mcp_auth import HashedBearerVerifier
+from mcp_auth import HashedBearerVerifier, configured_auth
 
 
 class AdminPdfTests(unittest.TestCase):
     def setUp(self):
-        self.environment = patch.dict(os.environ, {"WEBSITE_MCP_TOKEN": "website-fixture", "WEBSITE_URL": "https://website.example"})
+        # PDF extraction has no website callback, including for localhost admins.
+        self.environment = patch.dict(os.environ, {"WEBSITE_MCP_TOKEN": "website-fixture", "WEBSITE_URL": ""})
         self.environment.start()
         # The custom endpoint has separate explicit auth, even with MCP bearer auth enabled.
         app = FastMCP("PDF test", auth=HashedBearerVerifier(hashlib.sha256(b"mcp-fixture").hexdigest()))
@@ -50,8 +51,15 @@ class AdminPdfTests(unittest.TestCase):
             parser.assert_called_once_with(self.payload["pdf_base64"], "source.pdf", 1, 20)
 
     def test_unconfigured_oversized_and_invalid_requests_fail_closed(self):
-        with patch.dict(os.environ, {"WEBSITE_MCP_TOKEN": ""}):
-            self.assertEqual(self.client.post("/admin/extract-pdf", json=self.payload, headers=self.headers).status_code, 503)
+        for missing_token in ["", "   "]:
+            with patch.dict(os.environ, {"WEBSITE_MCP_TOKEN": missing_token}), patch("admin_pdf.extract_pdf_context") as legacy_parser, patch("admin_pdf.extract_pdf_bytes") as direct_parser:
+                response = self.client.post("/admin/extract-pdf", json=self.payload, headers=self.headers)
+                self.assertEqual(response.status_code, 503)
+                self.assertIn("WEBSITE_MCP_TOKEN", response.json()["error"])
+                direct = self.client.post("/admin/extract-pdf", content=b"%PDF-fixture", headers=self.scoped_headers(b"%PDF-fixture"))
+                self.assertEqual(direct.status_code, 503)
+                legacy_parser.assert_not_called()
+                direct_parser.assert_not_called()
         self.assertEqual(self.client.post("/admin/extract-pdf", content=b"x" * (MAX_BODY_BYTES + 1), headers=self.headers).status_code, 413)
         with patch("admin_pdf.extract_pdf_context") as parser:
             for extra in [{"url": "https://attacker.example"}, {"start_page": "1"}, {"max_pages": True}, {"filename": 123}, {"pdf_base64": 123}]:
@@ -103,6 +111,58 @@ class AdminPdfTests(unittest.TestCase):
         self.assertEqual(response.headers["access-control-allow-origin"], "http://localhost:3000")
         self.assertNotIn("access-control-allow-credentials", response.headers)
         self.assertEqual(self.client.post("/admin/extract-pdf", content=b"%PDF-fixture", headers={"Origin": "http://localhost:3000"}).status_code, 401)
+
+    def test_localhost_upload_needs_no_website_url_and_preserves_origin_bound_auth(self):
+        raw = b"%PDF-fixture"
+        extracted = {"kind": "pdf", "source_sha256": hashlib.sha256(raw).hexdigest(), "pages": [{"page": 1, "text": "Synthetic localhost evidence"}]}
+        for origin in ["http://localhost:3000", "http://127.0.0.1:3000"]:
+            with self.subTest(origin=origin), patch.dict(os.environ, {}, clear=False), patch("admin_pdf.extract_pdf_bytes", return_value=extracted) as parser:
+                os.environ.pop("WEBSITE_URL", None)
+                headers = {**self.scoped_headers(raw, origin=origin), "Origin": origin}
+                response = self.client.post("/admin/extract-pdf", content=raw, headers=headers)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.headers["access-control-allow-origin"], origin)
+                self.assertNotIn("access-control-allow-credentials", response.headers)
+                kind, encoded, _ = response.json()["receipt"].split(".")
+                payload = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+                self.assertEqual(payload["extracted"], extracted)
+                self.assertEqual(payload["upload"]["origin"], origin)
+                self.assertEqual(response.json()["receipt"], sign_pdf_token(kind, payload, "website-fixture"))
+                parser.assert_called_once_with(raw, "source.pdf", 1, 20)
+                parser.reset_mock()
+                wrong_origin = self.client.post("/admin/extract-pdf", content=raw, headers={**headers, "Origin": "http://localhost:3001"})
+                self.assertEqual(wrong_origin.status_code, 401)
+                for authorization in ["Bearer wrong", "Bearer mcp-fixture", "Bearer website-fixture"]:
+                    denied = self.client.post("/admin/extract-pdf", content=raw, headers={**headers, "Authorization": authorization})
+                    self.assertEqual(denied.status_code, 401)
+                parser.assert_not_called()
+
+    def test_pdf_only_configuration_still_requires_separate_mcp_authentication(self):
+        with patch.dict(os.environ, {"MCP_AUTH_TOKEN_SHA256": ""}):
+            with self.assertRaisesRegex(RuntimeError, "MCP_AUTH_TOKEN_SHA256"):
+                configured_auth()
+        digest = hashlib.sha256(b"mcp-fixture").hexdigest()
+        with patch.dict(os.environ, {"MCP_AUTH_TOKEN_SHA256": digest}):
+            verifier = configured_auth()
+            self.assertIsInstance(verifier, HashedBearerVerifier)
+            self.assertEqual(verifier.expected_hash, digest)
+
+    def test_localhost_signed_upload_runs_the_real_pdf_parser_without_a_website_callback(self):
+        from test_content_tools import pdf_bytes
+
+        raw = pdf_bytes(text="Synthetic localhost PDF context.")
+        origin = "http://localhost:3000"
+        headers = {**self.scoped_headers(raw, origin=origin), "Origin": origin}
+        with patch.dict(os.environ, {}, clear=False), patch("urllib.request.build_opener", side_effect=AssertionError("Extraction must not call the website")) as website_network:
+            os.environ.pop("WEBSITE_URL", None)
+            response = self.client.post("/admin/extract-pdf", content=raw, headers=headers)
+            self.assertEqual(response.status_code, 200)
+            website_network.assert_not_called()
+        kind, encoded, _ = response.json()["receipt"].split(".")
+        payload = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+        self.assertIn("Synthetic localhost PDF context.", payload["extracted"]["pages"][0]["text"])
+        self.assertEqual(payload["extracted"]["source_sha256"], hashlib.sha256(raw).hexdigest())
+        self.assertEqual(response.json()["receipt"], sign_pdf_token(kind, payload, "website-fixture"))
 
 
 if __name__ == "__main__":

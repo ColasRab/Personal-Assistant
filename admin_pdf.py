@@ -1,4 +1,4 @@
-"""Server-to-server PDF extraction for the website admin (never a public upload)."""
+"""Authenticated PDF extraction for the website admin, including localhost."""
 
 import hmac
 import asyncio
@@ -93,8 +93,10 @@ async def _extract_admin_pdf(request: Request) -> JSONResponse:
     # Custom routes do not inherit MCP tool authentication. Authenticate explicitly.
     expected = os.environ.get("WEBSITE_MCP_TOKEN", "").strip()
     supplied = request.headers.get("authorization", "")
-    if not expected or not os.environ.get("WEBSITE_URL"):
-        return JSONResponse({"error": "Website PDF extraction is not configured."}, status_code=503)
+    # The browser returns extracted text to its own website; extraction never
+    # calls WEBSITE_URL. Only website-bridge tools need that callback setting.
+    if not expected:
+        return JSONResponse({"error": "PDF extraction is not configured. Set WEBSITE_MCP_TOKEN on the MCP server to match your website."}, status_code=503)
     if len(supplied) > 4096:
         return JSONResponse({"error": "Unauthorized."}, status_code=401)
     if supplied.startswith("Bearer pdf-upload-v1."):

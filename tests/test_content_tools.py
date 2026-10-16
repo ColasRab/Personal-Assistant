@@ -119,6 +119,14 @@ class PdfContextTests(unittest.TestCase):
 
 
 class ContentMcpTests(unittest.TestCase):
+    def test_pdf_tool_that_saves_to_website_still_requires_the_website_url(self):
+        from mcp_tools.content_tools import add_pdf_context
+        with patch.dict(os.environ, {"WEBSITE_URL": "", "WEBSITE_MCP_TOKEN": "website-fixture"}), patch("mcp_tools.content_tools.extract_pdf_context") as parser, patch("mcp_tools.content_tools.website_request") as bridge:
+            with self.assertRaisesRegex(ToolError, "Configure WEBSITE_URL"):
+                add_pdf_context("unused", "source.pdf", "22222222-2222-4222-8222-222222222222")
+            parser.assert_not_called()
+            bridge.assert_not_called()
+
     def test_tools_are_discoverable_and_cannot_approve_publish_or_delete(self):
         async def exercise():
             with patch.dict(os.environ, {}, clear=True):

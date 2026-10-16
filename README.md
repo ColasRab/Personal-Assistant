@@ -42,6 +42,30 @@ stores private context using a stable upload ID. Raw PDFs are not retained. Scan
 need OCR first. Redeploy **both** projects for the 20 MiB update; no SQL migration or
 new secret is needed.
 
+#### PDF uploads while the website runs on localhost
+
+The admin can upload PDFs to Render without deploying the website or exposing a
+tunnel. The browser sends the file to Render, receives a signed extraction receipt,
+and sends that receipt back to its local website to save the private context. The
+extractor never calls your website, so **`WEBSITE_URL` is not required for this flow**.
+
+- In the website's local `.env.local`, keep
+  `MCP_SERVER_URL=https://personal-assistant-6xxr.onrender.com/mcp` and your existing
+  `WEBSITE_MCP_TOKEN`.
+- On the Render MCP service, set the **same** `WEBSITE_MCP_TOKEN` and keep the separate
+  `MCP_AUTH_TOKEN_SHA256` configured. The server still refuses to start without MCP
+  bearer authentication when the shared website token is enabled.
+- Leave `WEBSITE_URL` unset for PDF-only localhost development; do not point a hosted
+  server at your computer's localhost. MCP tools that actually read/write the website,
+  including `website_add_pdf_context`, still require the website bridge's reachable
+  public HTTPS URL and shared token. The admin's direct upload is a separate route.
+
+For this fix, push and redeploy **only the MCP server**, then retry the PDF upload.
+The existing website upload flow already supports localhost origins. No website
+change, database migration or new secret is needed. Origin/file/owner/expiry-bound
+signatures, missing/wrong-token rejection, parser bounds and the 20 MiB limit remain
+unchanged. Missing shared-token configuration now names `WEBSITE_MCP_TOKEN` explicitly.
+
 AI runs are one story at a time, capped at 20 per admin per hour, with durable private
 history and one unfinished run per admin. Apply the website's `admin-ai-retries.sql`
 after `admin-ai.sql` to enable persisted free-tier cooldowns: temporary 429s retry
