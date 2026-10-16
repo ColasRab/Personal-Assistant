@@ -14,7 +14,9 @@ class NoRedirects(urllib.request.HTTPRedirectHandler):
         raise ToolError("The website integration redirected. Set WEBSITE_URL to its final canonical origin.")
 
 
-def website_request(payload: dict | None = None) -> dict:
+def website_request(payload: dict | None = None, *, endpoint: str = "linkedin") -> dict:
+    if endpoint not in {"linkedin", "content"}:
+        raise ToolError("Unknown website integration endpoint.")
     base = os.environ.get("WEBSITE_URL", "").strip().rstrip("/")
     token = os.environ.get("WEBSITE_MCP_TOKEN", "").strip()
     parsed = urllib.parse.urlsplit(base)
@@ -23,9 +25,9 @@ def website_request(payload: dict | None = None) -> dict:
         raise ToolError("Configure WEBSITE_URL and WEBSITE_MCP_TOKEN on the MCP server first.")
     if (parsed.scheme != "https" and not (is_local and parsed.scheme == "http")) or not parsed.hostname or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment:
         raise ToolError("WEBSITE_URL must be your website's canonical HTTPS origin, without a path.")
-    body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
     request = urllib.request.Request(
-        f"{base}/api/integrations/linkedin",
+        f"{base}/api/integrations/{endpoint}",
         data=body,
         headers={"Authorization": f"Bearer {token}", "Accept": "application/json", "Content-Type": "application/json"},
         method="POST" if payload is not None else "GET",

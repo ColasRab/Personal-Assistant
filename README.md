@@ -1,9 +1,84 @@
 # Personal Assistant MCP
 
-FastMCP provides LinkedIn draft and website import tools to your Mistral connector.
+FastMCP provides website editorial tools, private PDF context, LinkedIn drafts and
+website import tools to your Mistral connector.
 Deploy the Dockerfile as a Render Web Service. Its endpoints are `/health` and `/mcp`.
 
 ## Website integration
+
+### Website content and PDF context
+
+Apply the companion website's `supabase/content-management.sql` after its existing
+schema, LinkedIn, and Buffer migrations. Redeploy the website and this MCP server,
+then refresh tool discovery for your existing Mistral connector.
+
+New tools use the `website_` namespace:
+
+- `list_posts` / `get_post`: read drafts and published stories, current version, and context references.
+- `create_post`: create a website draft from user instructions or source material.
+- `propose_post_update` / `redo_post`: submit rewritten copy as a proposal, never overwrite a story.
+- `review_posts`: flag structural quality issues on one story or a page of stories.
+- `add_text_context` / `add_pdf_context`: save private reference text with source/page metadata.
+- `list_contexts` / `read_context`: inspect evidence before writing or rewriting.
+- `read_linkedin_posts`: read up to 25 sent posts available in Buffer, without importing/publishing.
+
+The Mistral host writes the actual copy based on your prompt and evidence. Quality flags
+are heuristic suggestions, not factual verification. Stable UUID `request_id` values
+are required for writes; reuse the same UUID when retrying the same operation. The
+website rejects a reused UUID with a different payload. For updates, read the story
+first and supply its exact `updated_at`. Omitted tags/context IDs are preserved.
+
+Review proposals in **/admin > MCP workspace**. Only a signed-in administrator can
+apply them. Applying updates a published website story immediately; draft stories
+remain drafts. New MCP drafts are published manually in Stories. LinkedIn requires its
+own separate review/approval. There are no MCP tools for approval, publication,
+deletion, changing settings, editing site code, or fetching arbitrary URLs.
+
+The new endpoint is `POST /api/integrations/content`. It uses the same fixed-destination
+website bridge and shared token as the existing LinkedIn endpoint. All content calls
+also require `WEBSITE_OWNER_USER_ID` on the website to identify an existing admin user.
+Private sources and revision history are stored in Supabase, not Render's filesystem.
+
+### Use Mistral with your content tools
+
+Install local helper dependencies and configure `.env.local` beside `manage_website.py`:
+
+```powershell
+python -m pip install -r requirements-client.txt
+```
+
+Set `MISTRAL_API_KEY`, your saved `MISTRAL_CONNECTOR_ID`, and the original
+`MCP_AUTH_TOKEN` for PDF uploads. `MCP_SERVER_URL` defaults to the current Render `/mcp`
+endpoint. Keep all credentials private. The helper reuses the connector; it does not
+create one on each invocation.
+
+```powershell
+python manage_website.py --prompt "Review my website posts. Read the weak ones and their context, then propose specific, source-supported rewrites. Do not publish."
+python manage_website.py --pdf "C:\Users\colas\Documents\project.pdf" --prompt "Read the attached context and create a website draft about my project. Cite page numbers; do not invent results."
+python manage_website.py --pdf "C:\Users\colas\Documents\project.pdf" --upload-only
+python manage_website.py --context "paste-the-printed-context-uuid" --prompt "Use this evidence to propose an update to my existing project story."
+```
+
+A Render server cannot open a file on your computer. The helper reads your selected
+local file and sends its bytes directly to your own authenticated MCP server; base64
+is not inserted into the Mistral prompt. Only extracted text is saved as private
+website context. When Mistral reads the context, those excerpts are sent to Mistral.
+Only upload material you are authorized and comfortable sharing with these services.
+
+PDF limits: 5 MiB, up to 40 pages per range (20 by default), and 60,000 characters.
+Use `--start-page 21 --max-pages 20` to attach a subsequent range. The helper uses a
+stable request UUID for the same file/range so retries do not create duplicate context.
+The server reports omitted text/pages. Text extraction is not OCR or visual review;
+scanned/image-only and encrypted PDFs need a suitable authorized text copy first.
+The parser uses a subprocess, bounded time, a stripped environment, and Linux CPU/
+memory limits. It does not retain the original PDF. These are resource limits, not a
+complete security sandbox. Source text is untrusted data, not instructions.
+
+LinkedIn context is limited to what Buffer makes available for your configured
+personal profile. For native posts or mentions not available there, supply the
+original LinkedIn post link and your own excerpt/summary. No scraping or cookies.
+
+### Existing LinkedIn draft bridge
 
 The companion Next.js website has a **LinkedIn review** tab under `/admin`. Apply its
 `supabase/linkedin-sync.sql` and `supabase/buffer-publishing.sql` migrations and configure
