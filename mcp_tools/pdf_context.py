@@ -12,21 +12,28 @@ import threading
 
 from fastmcp.exceptions import ToolError
 
-MAX_PDF_BYTES = 5 * 1024 * 1024
+MAX_PDF_BYTES = 20 * 1024 * 1024
 _parser_slot = threading.BoundedSemaphore(1)
 
 
 def extract_pdf_context(pdf_base64: str, filename: str, start_page: int = 1, max_pages: int = 20) -> dict:
     if not isinstance(pdf_base64, str) or len(pdf_base64) > 4 * ((MAX_PDF_BYTES + 2) // 3):
-        raise ToolError("Upload a PDF no larger than 5 MiB.")
+        raise ToolError("Upload a PDF no larger than 20 MiB.")
     if not 1 <= start_page <= 2000 or not 1 <= max_pages <= 40:
         raise ToolError("start_page must be 1–2000 and max_pages must be 1–40.")
     try:
         raw = base64.b64decode(pdf_base64, validate=True)
     except (ValueError, binascii.Error):
         raise ToolError("Supply plain base64 PDF bytes, not a file path, URL, or data URI.") from None
-    if len(raw) > MAX_PDF_BYTES or not raw.startswith(b"%PDF-"):
-        raise ToolError("Upload a valid PDF no larger than 5 MiB.")
+    return extract_pdf_bytes(raw, filename, start_page, max_pages)
+
+
+def extract_pdf_bytes(raw: bytes, filename: str, start_page: int = 1, max_pages: int = 20) -> dict:
+    """Raw-byte intake avoids base64 copies for direct browser uploads."""
+    if not 1 <= start_page <= 2000 or not 1 <= max_pages <= 40:
+        raise ToolError("start_page must be 1–2000 and max_pages must be 1–40.")
+    if not isinstance(raw, bytes) or len(raw) > MAX_PDF_BYTES or not raw.startswith(b"%PDF-"):
+        raise ToolError("Upload a valid PDF no larger than 20 MiB.")
     if not _parser_slot.acquire(blocking=False):
         raise ToolError("Another PDF is being processed. Try again when it finishes.")
     try:

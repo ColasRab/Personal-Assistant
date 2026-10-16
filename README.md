@@ -6,10 +6,62 @@ Deploy the Dockerfile as a Render Web Service. Its endpoints are `/health` and `
 
 ## Website integration
 
+### Control content from the website admin
+
+Normal editorial work can now be done in **/admin > MCP workspace**: create a draft,
+review/rewrite a saved story, select private sources, upload a PDF, inspect run
+history, and approve a proposal. The website runs Mistral server-side and uses the
+same content services/idempotency/approval rules as MCP. It does not give the model
+email tools, arbitrary network access, or approval/publication capabilities.
+
+One-time setup:
+
+1. Apply the website's `supabase/admin-ai.sql` after `content-management.sql` and
+   `revision-requests.sql`.
+2. On the **website host**, set server-only `MISTRAL_API_KEY`, optional
+   `MISTRAL_MODEL` (default `mistral-medium-latest`), and `MCP_SERVER_URL` to your
+   Render server's canonical HTTPS `/mcp` URL. Keep `WEBSITE_MCP_TOKEN` identical
+   on the website and MCP server. Do not use `NEXT_PUBLIC_` for these secrets.
+3. Redeploy both projects. The admin workflow does not need a connector ID or a
+   local helper; the existing connector continues to work for external MCP clients.
+
+`POST /admin/extract-pdf` is a fixed-purpose extractor, separate from `/mcp` auth.
+PDFs up to **20 MiB** go directly from the admin browser to Render as raw bytes,
+avoiding website-function payload limits and large base64 copies. The website first
+validates the admin session and issues a five-minute HMAC token bound to the file's
+size, SHA-256, title, page range, owner and browser origin. The shared
+`WEBSITE_MCP_TOKEN` never reaches the browser. CORS preflight is public but grants no
+extraction access; POST always validates the scoped token. Existing server-to-server
+bearer/JSON uploads remain supported, but cannot be used as browser credentials.
+
+The isolated parser still limits extraction to 40 pages / 60,000 characters, with
+one active upload per process and bounded upload/parser times and memory. It never
+invokes Mistral or saves a story. The browser returns a ten-minute signed receipt
+containing extracted text to the website, which verifies its signature/owner and
+stores private context using a stable upload ID. Raw PDFs are not retained. Scans
+need OCR first. Redeploy **both** projects for the 20 MiB update; no SQL migration or
+new secret is needed.
+
+AI runs are one story at a time, capped at 20 per admin per hour, with durable private
+history and one unfinished run per admin. Apply the website's `admin-ai-retries.sql`
+after `admin-ai.sql` to enable persisted free-tier cooldowns: temporary 429s retry
+the same run automatically while MCP workspace is open, with a countdown, up to
+five total attempts within 20 minutes. Closing the workspace pauses retries until
+it is reopened; this is not a scheduler. Retry-After is honored, known billing/quota
+failures stop, and the administrator can cancel a waiting run. Older rate-limited
+failures have an explicit **Retry rate-limited run** button. Only the website needs
+redeployment for this retry update; the MCP server is unchanged.
+**Continue saved run** reuses saved generated text without another model call.
+Interrupted generations with an unknown outcome are never automatically retried; a new
+run may incur another API charge. Applying a proposal or publishing remains a
+separate explicit administrator action. LinkedIn imports/approvals remain in their
+existing admin tab; Buffer access does not cover all native posts or mentions.
+
 ### Website content and PDF context
 
 Apply the companion website's `supabase/content-management.sql` after its existing
-schema, LinkedIn, and Buffer migrations. Redeploy the website and this MCP server,
+schema, LinkedIn, and Buffer migrations, then apply `supabase/revision-requests.sql`.
+Redeploy the website and this MCP server,
 then refresh tool discovery for your existing Mistral connector.
 
 New tools use the `website_` namespace:
@@ -18,6 +70,7 @@ New tools use the `website_` namespace:
 - `create_post`: create a website draft from user instructions or source material.
 - `propose_post_update` / `redo_post`: submit rewritten copy as a proposal, never overwrite a story.
 - `review_posts`: flag structural quality issues on one story or a page of stories.
+- `list_revision_requests`: read the private, paginated queue marked in the website admin.
 - `add_text_context` / `add_pdf_context`: save private reference text with source/page metadata.
 - `list_contexts` / `read_context`: inspect evidence before writing or rewriting.
 - `read_linkedin_posts`: read up to 25 sent posts available in Buffer, without importing/publishing.
@@ -27,6 +80,16 @@ are heuristic suggestions, not factual verification. Stable UUID `request_id` va
 are required for writes; reuse the same UUID when retrying the same operation. The
 website rejects a reused UUID with a different payload. For updates, read the story
 first and supply its exact `updated_at`. Omitted tags/context IDs are preserved.
+
+In the website admin's **Stories** tab, **Mark for revision** queues a saved post with
+optional editorial notes; **Mark listed posts for revision** queues up to 100 posts
+matching the current filters without erasing existing notes. Marking does not run AI,
+save unsaved text, or rewrite/publish anything. Choose **Prepare rewrite** in the
+admin and run Mistral there, or ask an external assistant to read the queue and submit
+proposals. Requests are visible in
+**MCP workspace** and clear only after an eligible proposal is approved/applied (or
+the administrator removes the request). An older approval cannot clear newer notes.
+The public post page and admin editor also include an interactive image gallery.
 
 Review proposals in **/admin > MCP workspace**. Only a signed-in administrator can
 apply them. Applying updates a published website story immediately; draft stories
@@ -39,7 +102,7 @@ website bridge and shared token as the existing LinkedIn endpoint. All content c
 also require `WEBSITE_OWNER_USER_ID` on the website to identify an existing admin user.
 Private sources and revision history are stored in Supabase, not Render's filesystem.
 
-### Use Mistral with your content tools
+### Optional: use Mistral from a local helper
 
 Install local helper dependencies and configure `.env.local` beside `manage_website.py`:
 
@@ -65,7 +128,7 @@ is not inserted into the Mistral prompt. Only extracted text is saved as private
 website context. When Mistral reads the context, those excerpts are sent to Mistral.
 Only upload material you are authorized and comfortable sharing with these services.
 
-PDF limits: 5 MiB, up to 40 pages per range (20 by default), and 60,000 characters.
+PDF limits: 20 MiB, up to 40 pages per range (20 by default), and 60,000 characters.
 Use `--start-page 21 --max-pages 20` to attach a subsequent range. The helper uses a
 stable request UUID for the same file/range so retries do not create duplicate context.
 The server reports omitted text/pages. Text extraction is not OCR or visual review;

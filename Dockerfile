@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir --requirement requirements.txt
 
 COPY --chown=app:app server.py ./
 COPY --chown=app:app mcp_auth.py ./
+COPY --chown=app:app admin_pdf.py ./
 COPY --chown=app:app mcp_tools ./mcp_tools
 
 USER app

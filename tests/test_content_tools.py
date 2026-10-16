@@ -45,6 +45,14 @@ class PdfContextTests(unittest.TestCase):
         self.assertNotIn("pdf_base64", result)
         self.assertFalse(result["truncated"])
 
+    def test_parser_worker_accepts_valid_pdf_larger_than_the_previous_five_mib_limit(self):
+        writer = PdfWriter(io.BytesIO(pdf_bytes()))
+        writer.add_metadata({"/Padding": "x" * (6 * 1024 * 1024)})
+        buffer = io.BytesIO(); writer.write(buffer)
+        self.assertGreater(len(buffer.getvalue()), 5 * 1024 * 1024)
+        result = extract_pdf_context(base64.b64encode(buffer.getvalue()).decode(), "larger.pdf")
+        self.assertIn("supported result", result["pages"][0]["text"])
+
     def test_partial_page_ranges_are_explicit_and_keep_original_page_numbers(self):
         result = extract_pdf_context(base64.b64encode(pdf_bytes(pages=3)).decode(), "evidence.pdf", start_page=2, max_pages=1)
         self.assertEqual(result["total_pages"], 3)
@@ -117,7 +125,8 @@ class ContentMcpTests(unittest.TestCase):
                 from server import mcp as server
             async with Client(server) as client:
                 names = {tool.name for tool in await client.list_tools()}
-                self.assertEqual(len([name for name in names if name.startswith("website_")]), 11)
+                self.assertEqual(len([name for name in names if name.startswith("website_")]), 12)
+                self.assertIn("website_list_revision_requests", names)
                 self.assertIn("website_create_post", names)
                 self.assertIn("website_redo_post", names)
                 self.assertIn("website_add_pdf_context", names)
@@ -128,6 +137,11 @@ class ContentMcpTests(unittest.TestCase):
                     self.assertFalse(result.is_error)
                     self.assertEqual(request.call_args.kwargs["endpoint"], "content")
                     self.assertEqual(request.call_args.args[0]["action"], "list_posts")
+                with patch("mcp_tools.content_tools.website_request", return_value={"requests": [], "total": 0}) as request:
+                    result = await client.call_tool("website_list_revision_requests", {"offset": 20, "limit": 10})
+                    self.assertFalse(result.is_error)
+                    self.assertEqual(request.call_args.kwargs["endpoint"], "content")
+                    self.assertEqual(request.call_args.args[0], {"action": "list_revision_requests", "offset": 20, "limit": 10})
                 with patch("mcp_tools.content_tools.website_request", return_value={"revisionId": "revision", "status": "pending"}) as request:
                     await client.call_tool("website_redo_post", {"post_id": "post", "expected_updated_at": "version", "title": "Title", "description": "Summary", "body": "Rewritten story", "reason": "Fix weak content", "category": "personal_works", "request_id": "stable-id"})
                     self.assertEqual(request.call_args.args[0]["requestId"], "stable-id")

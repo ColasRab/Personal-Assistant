@@ -4,7 +4,7 @@ import io
 import json
 import sys
 
-MAX_BYTES = 5 * 1024 * 1024
+MAX_BYTES = 20 * 1024 * 1024
 MAX_TEXT = 60_000
 
 
@@ -19,7 +19,7 @@ def run():
     start, count = int(sys.argv[1]), int(sys.argv[2])
     raw = sys.stdin.buffer.read(MAX_BYTES + 1)
     if len(raw) > MAX_BYTES or not raw.startswith(b"%PDF-"):
-        return {"error": "Upload a valid PDF no larger than 5 MiB."}
+        return {"error": "Upload a valid PDF no larger than 20 MiB."}
     reader = PdfReader(io.BytesIO(raw), strict=False)
     if reader.is_encrypted:
         return {"error": "Password-protected PDFs are not supported. Supply an authorized, unencrypted copy."}
